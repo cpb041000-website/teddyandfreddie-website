@@ -88,6 +88,8 @@
             gap: 6px;
             margin: 0 auto 20px auto;
             width: fit-content;
+            position: relative;
+            overflow: visible;
         }
 
         .cell {
@@ -117,6 +119,17 @@
 
         .cell.o {
             color: #e74c3c;
+        }
+
+        @keyframes dadAppear {
+            from { opacity: 0; transform: scale(0.5); }
+            to { opacity: 1; transform: scale(1); }
+        }
+
+        .cell.dad-move {
+            animation: dadAppear 0.4s ease-out;
+            border: 2px dashed rgba(102, 126, 234, 0.6);
+            background: #fff9e6;
         }
 
         .cell.winner {
@@ -213,6 +226,8 @@
         let currentPlayer = 'X';
         let gameActive = true;
         let scores = { X: 0, O: 0 };
+        let isDraw = false;
+        let dadMoveUsed = false;
 
         function generateWinPatterns() {
             const patterns = [];
@@ -369,6 +384,7 @@
 
             if (board.every(cell => cell !== '')) {
                 gameActive = false;
+                isDraw = true;
                 status.textContent = "It's a draw!";
                 return;
             }
@@ -399,15 +415,144 @@
             oScoreEl.textContent = scores.O;
         }
 
+        function findDadMove(player) {
+            const diagonals = [[1, 1], [-1, -1], [1, -1], [-1, 1]];
+            const straights = [[0, 1], [0, -1], [1, 0], [-1, 0]];
+
+            // Build border cells: prefer off in one dimension only (edges),
+            // then off in two dimensions (corners, more jarring visually).
+            // Within each group, sides before top/bottom.
+            const edgeCells = [];
+            const cornerCells = [];
+            for (let br = -1; br <= rows; br++) {
+                const rowOff = br < 0 || br >= rows;
+                if (rowOff) {
+                    cornerCells.push([br, -1]);
+                    cornerCells.push([br, cols]);
+                } else {
+                    edgeCells.push([br, -1]);
+                    edgeCells.push([br, cols]);
+                }
+            }
+            for (let bc = 0; bc < cols; bc++) {
+                edgeCells.push([rows, bc]);
+                edgeCells.push([-1, bc]);
+            }
+            const borderCells = [...edgeCells, ...cornerCells];
+
+            function tryDirections(directions) {
+                for (const [br, bc] of borderCells) {
+                    for (const [dr, dc] of directions) {
+                        const line = [[br, bc]];
+                        let valid = true;
+                        for (let i = 1; i < winCount; i++) {
+                            const nr = br + i * dr;
+                            const nc = bc + i * dc;
+                            if (nr < 0 || nr >= rows || nc < 0 || nc >= cols) {
+                                valid = false;
+                                break;
+                            }
+                            if (board[nr * cols + nc] !== player) {
+                                valid = false;
+                                break;
+                            }
+                            line.push([nr, nc]);
+                        }
+                        if (valid && line.length === winCount) {
+                            return { cell: [br, bc], line, player };
+                        }
+                    }
+                }
+                return null;
+            }
+
+            // Diagonals first (funnier), then fall back to straights
+            return tryDirections(diagonals) || tryDirections(straights);
+        }
+
+        function executeDadMove(dadResult) {
+            const { cell: [offR, offC], line, player } = dadResult;
+            const cells = boardEl.querySelectorAll('.cell');
+            const cellSize = cells[0].offsetWidth;
+            const gap = 6;
+            const fontSize = Math.floor(cellSize * 0.6);
+
+            // Add margin to make room if the cell lands above or left of the board
+            if (offR < 0) {
+                boardEl.style.marginTop = (Math.abs(offR) * (cellSize + gap) + 20) + 'px';
+            }
+            if (offC < 0) {
+                boardEl.style.marginLeft = (Math.abs(offC) * (cellSize + gap) + 20) + 'px';
+            }
+
+            const dadCell = document.createElement('button');
+            dadCell.className = 'cell taken ' + player.toLowerCase() + ' dad-move';
+            dadCell.textContent = player;
+            dadCell.style.width = cellSize + 'px';
+            dadCell.style.height = cellSize + 'px';
+            dadCell.style.fontSize = fontSize + 'px';
+            dadCell.style.position = 'absolute';
+            dadCell.style.left = (offC * (cellSize + gap)) + 'px';
+            dadCell.style.top = (offR * (cellSize + gap)) + 'px';
+
+            boardEl.appendChild(dadCell);
+
+            setTimeout(() => {
+                for (const [lr, lc] of line) {
+                    if (lr >= 0 && lr < rows && lc >= 0 && lc < cols) {
+                        cells[lr * cols + lc].classList.add('winner');
+                    }
+                }
+                dadCell.classList.add('winner');
+                status.textContent = 'Wait... ' + player + ' wins!';
+                scores[player]++;
+                updateScores();
+            }, 500);
+        }
+
         function resetGame() {
             validateConfig();
             createBoard();
+            boardEl.style.marginTop = '';
+            boardEl.style.marginLeft = '';
             currentPlayer = 'X';
             gameActive = true;
+            isDraw = false;
+            dadMoveUsed = false;
             status.textContent = "Player X's turn";
         }
 
         resetBtn.addEventListener('click', resetGame);
+
+        function triggerDadMove(player) {
+            if (!isDraw || dadMoveUsed || connect4Mode) return;
+            const dadResult = findDadMove(player);
+            if (dadResult) {
+                dadMoveUsed = true;
+                status.textContent = "It's a draw... or is it?";
+                setTimeout(() => executeDadMove(dadResult), 1000);
+            }
+        }
+
+        document.querySelectorAll('.score-item').forEach(el => {
+            // Desktop: ctrl+click
+            el.addEventListener('click', (e) => {
+                if (!e.ctrlKey) return;
+                e.preventDefault();
+                triggerDadMove(el.classList.contains('x-score') ? 'X' : 'O');
+            });
+
+            // Mobile: long-press
+            let pressTimer = null;
+            el.addEventListener('touchstart', (e) => {
+                pressTimer = setTimeout(() => {
+                    e.preventDefault();
+                    triggerDadMove(el.classList.contains('x-score') ? 'X' : 'O');
+                }, 800);
+            });
+            el.addEventListener('touchend', () => clearTimeout(pressTimer));
+            el.addEventListener('touchmove', () => clearTimeout(pressTimer));
+        });
 
         // Initialize the game
         resetGame();
